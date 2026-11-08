@@ -1,4 +1,4 @@
-﻿name: Build Aseprite
+name: Build Aseprite
 on:
   workflow_dispatch:
 
@@ -50,7 +50,13 @@ jobs:
           Invoke-WebRequest -Uri "https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-Windows-Release-x64.zip" -OutFile "skia.zip" -UseBasicParsing
           mkdir skia -Force
           Expand-Archive -Force "skia.zip" "skia"
-          Write-Host "Skia extracted successfully"
+          
+          # Patch missing Skia placeholders required by CMake configuration
+          New-Item -ItemType Directory -Force -Path "skia\third_party\externals\libjpeg-turbo"
+          New-Item -ItemType Directory -Force -Path "skia\third_party\externals\icu\flutter"
+          New-Item -ItemType File -Force -Path "skia\third_party\externals\icu\flutter\icudtl.dat"
+          
+          Write-Host "Skia extracted and patched successfully"
 
       - name: Initialize MSVC Environment
         uses: ilammy/msvc-dev-cmd@v1
