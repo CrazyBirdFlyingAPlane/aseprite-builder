@@ -1,20 +1,26 @@
+
 name: Build Aseprite
+
 on:
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: windows-latest
+
     permissions:
       contents: write
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
       - name: Enable Long Paths
+        shell: powershell
         run: git config --system core.longpaths true
 
       - name: Install Build Tools
+        shell: powershell
         run: choco install cmake ninja innosetup -y --no-progress
 
       - name: Fetch Latest Release Metadata
@@ -22,41 +28,115 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $headers = @{}
-          if ($env:GH_TOKEN) { $headers["Authorization"] = "token $env:GH_TOKEN" }
-          $resp = (Invoke-WebRequest -UseBasicParsing -Headers $headers -Uri https://api.github.com/repos/aseprite/aseprite/releases/latest -ErrorAction Stop).Content | ConvertFrom-Json
-          $asset = $resp.assets | Where-Object { $_.name -like "*Source.zip" } | Select-Object -First 1
-          if (-not $asset) {
-              $asset = $resp.assets | Select-Object -First 1
+          $headers = @{
+            "Accept" = "application/vnd.github+json"
+            "User-Agent" = "Aseprite-Builder"
           }
-          echo "DOWNLOAD_URL=$($asset.browser_download_url)" >> $env:GITHUB_ENV
-          echo "ASE_VER=$($resp.tag_name)" >> $env:GITHUB_ENV
-          echo "Detected Aseprite version: $($resp.tag_name)"
-          echo "Source asset: $($asset.name)"
+
+          if ($env:GH_TOKEN) {
+            $headers["Authorization"] = "Bearer $env:GH_TOKEN"
+          }
+
+          $resp = Invoke-RestMethod `
+            -Headers $headers `
+            -Uri "https://api.github.com/repos/aseprite/aseprite/releases/latest" `
+            -ErrorAction Stop
+
+          $asset = $resp.assets |
+            Where-Object { $_.name -match "Source\.zip$" } |
+            Select-Object -First 1
+
+          if (-not $asset) {
+            throw "Could not find Aseprite source ZIP in latest release."
+          }
+
+          "DOWNLOAD_URL=$($asset.browser_download_url)" >> $env:GITHUB_ENV
+          "ASE_VER=$($resp.tag_name)" >> $env:GITHUB_ENV
+
+          Write-Host "Aseprite version: $($resp.tag_name)"
+          Write-Host "Source asset: $($asset.name)"
 
       - name: Download & Extract Source
         shell: powershell
         run: |
-          Invoke-WebRequest -Uri ${{ env.DOWNLOAD_URL }} -OutFile "aseprite_src.zip" -UseBasicParsing
-          Expand-Archive -Force "aseprite_src.zip" "temp_ext"
-          $rootFile = Get-ChildItem -Path "temp_ext" -Filter "CMakeLists.txt" -Recurse | Select-Object -First 1
-          mkdir aseprite -Force
-          Get-ChildItem -Path "$($rootFile.Directory.FullName)\*" | Move-Item -Destination "aseprite" -Force
-          Write-Host "Source extracted successfully"
+          $ErrorActionPreference = "Stop"
+
+          Invoke-WebRequest `
+            -Uri "$env:DOWNLOAD_URL" `
+            -OutFile "aseprite_src.zip" `
+            -UseBasicParsing
+
+          if (-not (Test-Path "aseprite_src.zip")) {
+            throw "Aseprite source download failed."
+          }
+
+          Expand-Archive -Path "aseprite_src.zip" -DestinationPath "temp_ext" -Force
+
+          $rootFile = Get-ChildItem -Path "temp_ext" -Filter "CMakeLists.txt" -Recurse |
+            Select-Object -First 1
+
+          if (-not $rootFile) {
+            throw "Could not find Aseprite CMakeLists.txt."
+          }
+
+          New-Item -ItemType Directory -Force -Path "aseprite" | Out-Null
+
+          Get-ChildItem -Path $rootFile.Directory.FullName |
+            Move-Item -Destination "aseprite" -Force
+
+          Write-Host "Aseprite source extracted successfully."
 
       - name: Download & Extract Skia
         shell: powershell
         run: |
-          Invoke-WebRequest -Uri "https://github.com" -OutFile "skia.zip" -UseBasicParsing
-          mkdir skia -Force
-          Expand-Archive -Force "skia.zip" "skia"
-          
-          # Patch missing Skia placeholders required by CMake configuration
-          New-Item -ItemType Directory -Force -Path "skia\third_party\externals\libjpeg-turbo"
-          New-Item -ItemType Directory -Force -Path "skia\third_party\externals\icu\flutter"
-          New-Item -ItemType File -Force -Path "skia\third_party\externals\icu\flutter\icudtl.dat"
-          
-          Write-Host "Skia extracted and patched successfully"
+          $ErrorActionPreference = "Stop"
+
+          # Download the Skia repository instead of the GitHub homepage.
+          $skiaUrl = "https://github.com/aseprite/skia/archive/refs/heads/main.zip"
+
+          Invoke-WebRequest `
+            -Uri $skiaUrl `
+            -OutFile "skia.zip" `
+            -UseBasicParsing
+
+          # Verify the downloaded file is a real ZIP.
+          $file = Get-Item "skia.zip"
+
+          if ($file.Length -lt 100000) {
+            throw "Skia download is too small. The URL may not point to a ZIP archive."
+          }
+
+          try {
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $zip = [System.IO.Compression.ZipFile]::OpenRead(
+              (Resolve-Path "skia.zip").Path
+            )
+            $zip.Dispose()
+          }
+          catch {
+            throw "Skia download is not a valid ZIP archive: $_"
+          }
+
+          Expand-Archive -Path "skia.zip" -DestinationPath "skia_temp" -Force
+
+          $skiaRoot = Get-ChildItem "skia_temp" -Directory |
+            Select-Object -First 1
+
+          if (-not $skiaRoot) {
+            throw "Skia extraction failed."
+          }
+
+          if (Test-Path "skia") {
+            Remove-Item "skia" -Recurse -Force
+          }
+
+          Move-Item $skiaRoot.FullName "skia"
+
+          if (-not (Test-Path "skia\include\core\SkCanvas.h")) {
+            throw "Downloaded Skia source does not contain the expected headers."
+          }
+
+          Write-Host "Skia source downloaded and extracted successfully."
 
       - name: Initialize MSVC Environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -64,11 +144,16 @@ jobs:
       - name: Run CMake Configuration
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
+
           $abs_src = Join-Path $env:GITHUB_WORKSPACE "aseprite"
           $abs_skia = Join-Path $env:GITHUB_WORKSPACE "skia"
           $abs_build = Join-Path $env:GITHUB_WORKSPACE "build"
-          mkdir $abs_build -Force
+
+          New-Item -ItemType Directory -Force -Path $abs_build | Out-Null
+
           Set-Location $abs_build
+
           cmake -G Ninja `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DLAF_BACKEND=skia `
@@ -78,33 +163,63 @@ jobs:
             -DENABLE_UPDATER=OFF `
             -DENABLE_TESTS=OFF `
             "$abs_src"
-          Write-Host "CMake configuration completed"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "CMake configuration failed."
+          }
+
+          Write-Host "CMake configuration completed."
 
       - name: Compile with Ninja
+        shell: powershell
         run: |
-          cd build
+          $ErrorActionPreference = "Stop"
+
+          Set-Location build
+
           $cpuCount = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
-          $jobs = [math]::Min($cpuCount * 2, 8)
-          Write-Host "Using $jobs parallel compilation jobs"
+          $jobs = [math]::Min($cpuCount, 4)
+
+          Write-Host "Using $jobs compilation jobs."
+
           ninja -j $jobs
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Aseprite compilation failed."
+          }
 
       - name: Collect Dependencies (DLLs)
         shell: powershell
         run: |
           $binDir = "$env:GITHUB_WORKSPACE\build\bin"
           $sslDir = "C:\Program Files\OpenSSL\bin"
+
           if (Test-Path "$sslDir\libcrypto-3-x64.dll") {
-              Copy-Item "$sslDir\libcrypto-3-x64.dll" -Destination $binDir -Force
-              Copy-Item "$sslDir\libssl-3-x64.dll" -Destination $binDir -Force
-              echo "[+] DLLs copied to $binDir"
+            Copy-Item "$sslDir\libcrypto-3-x64.dll" -Destination $binDir -Force
+            Copy-Item "$sslDir\libssl-3-x64.dll" -Destination $binDir -Force
+            Write-Host "OpenSSL DLLs copied."
           } else {
-              echo "[!] OpenSSL DLLs not found - skipping"
+            Write-Host "OpenSSL DLLs not found - skipping."
           }
+
+      - name: Verify Build Output
+        shell: powershell
+        run: |
+          $exe = "$env:GITHUB_WORKSPACE\build\bin\aseprite.exe"
+
+          if (-not (Test-Path $exe)) {
+            throw "aseprite.exe was not generated."
+          }
+
+          Write-Host "Aseprite executable found."
 
       - name: Package Installer (Inno Setup)
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
+
           $binPath = Join-Path $env:GITHUB_WORKSPACE "build\bin"
+
           $iss = @"
           [Setup]
           AppName=Aseprite
@@ -115,14 +230,23 @@ jobs:
           OutputDir=installer
           Compression=lzma
           SolidCompression=yes
+
           [Files]
           Source: "$binPath\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
           [Icons]
           Name: "{group}\Aseprite"; Filename: "{app}\aseprite.exe"
           "@
-          mkdir installer -Force
+
+          New-Item -ItemType Directory -Force -Path "installer" | Out-Null
+
           $iss | Out-File -FilePath "aseprite.iss" -Encoding utf8
+
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" aseprite.iss
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup packaging failed."
+          }
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
