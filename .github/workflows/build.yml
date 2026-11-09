@@ -1,146 +1,182 @@
-Skip to content
-CrazyBirdFlyingAPlane
-aseprite-builder
-Repository navigation
-Code
-Pull requests
-Actions
-Projects
-Wiki
-Security and quality
-Insights
-Settings
-Build Aseprite
-Build Aseprite #4
-All jobs
-Run details
-build
-Started 23m 10s ago
-Search logs
-2s
-5s
-3s
-7s
-2s
-6m 29s
-16m 2s
-Run $ErrorActionPreference = "Stop"
-  $ErrorActionPreference = "Stop"
-  
-  # Download the Skia repository instead of the GitHub homepage.
-  $skiaUrl = "https://github.com/aseprite/skia/archive/refs/heads/main.zip"
-  
-  Invoke-WebRequest `
-    -Uri $skiaUrl `
-    -OutFile "skia.zip" `
-    -UseBasicParsing
-  
-  # Verify the downloaded file is a real ZIP.
-  $file = Get-Item "skia.zip"
-  
-  if ($file.Length -lt 100000) {
-    throw "Skia download is too small. The URL may not point to a ZIP archive."
-  }
-  
-  try {
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $zip = [System.IO.Compression.ZipFile]::OpenRead(
-      (Resolve-Path "skia.zip").Path
-    )
-    $zip.Dispose()
-  }
-  catch {
-    throw "Skia download is not a valid ZIP archive: $_"
-  }
-  
-  Expand-Archive -Path "skia.zip" -DestinationPath "skia_temp" -Force
-  
-  $skiaRoot = Get-ChildItem "skia_temp" -Directory |
-    Select-Object -First 1
-  
-  if (-not $skiaRoot) {
-    throw "Skia extraction failed."
-  }
-  
-  if (Test-Path "skia") {
-    Remove-Item "skia" -Recurse -Force
-  }
-  
-  Move-Item $skiaRoot.FullName "skia"
-  
-  if (-not (Test-Path "skia\include\core\SkCanvas.h")) {
-    throw "Downloaded Skia source does not contain the expected headers."
-  }
-  
-  Write-Host "Skia source downloaded and extracted successfully."
-  shell: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.EXE -command ". '{0}'"
-  env:
-    DOWNLOAD_URL: https://github.com/aseprite/aseprite/releases/download/v1.3.18.6/Aseprite-v1.3.18.6-Source.zip
-    ASE_VER: v1.3.18.6
-  
-Skia source downloaded and extracted successfully.
-3s
-Run ilammy/msvc-dev-cmd@v1
-  
-Found with vswhere: C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat
-Environment variables
-Configured Developer Command Prompt
-17s
-Run $ErrorActionPreference = "Stop"
-  
--- The C compiler identification is MSVC 19.51.36260.0
--- The CXX compiler identification is MSVC 19.51.36260.0
--- Detecting C compiler ABI info
--- Detecting C compiler ABI info - done
--- Check for working C compiler: C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe - skipped
--- Detecting C compile features
--- Detecting C compile features - done
--- Detecting CXX compiler ABI info
--- Detecting CXX compiler ABI info - done
--- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe - skipped
--- Detecting CXX compile features
--- Detecting CXX compile features - done
--- Found CCache: C:/Strawberry/c/bin/ccache.exe (found version "4.9.1")
--- Looking for sys/types.h
--- Looking for sys/types.h - found
--- Looking for stdint.h
--- Looking for stdint.h - found
--- Looking for stddef.h
--- Looking for stddef.h - found
--- Check size of off64_t
--- Check size of off64_t - failed
--- Looking for fseeko
--- Looking for fseeko - not found
--- Looking for unistd.h
--- Looking for unistd.h - not found
--- Renaming
---     D:/a/aseprite-builder/aseprite-builder/aseprite/third_party/zlib/zconf.h
--- to 'zconf.h.included' because this file is included with zlib
--- but CMake generates it automatically in the build directory.
--- The ASM compiler identification is MSVC
-CMake Warning (policy) at C:/Program Files/CMake/share/cmake-4.4/Modules/CMakeDetermineASMCompiler.cmake:237 (cmake_policy):
-  Policy CMP0194 is not set: MSVC is not an assembler for language ASM.  Run
-  "cmake --help-policy CMP0194" for policy details.  Use the cmake_policy
-  command to set the policy and suppress this warning.
-Call Stack (most recent call first):
-  third_party/libpng/CMakeLists.txt:28 (project)
-This warning is for project developers.  Use -Wno-author or -Wno-policy to
-suppress it.
--- Found assembler: C:/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/14.51.36231/bin/Hostx64/x64/cl.exe
--- Building for target architecture: amd64
--- Found ZLIB: zlibstatic
--- Performing Test HAVE_LD_VERSION_SCRIPT
--- Performing Test HAVE_LD_VERSION_SCRIPT - Failed
--- Performing Test HAVE_SOLARIS_LD_VERSION_SCRIPT
--- Performing Test HAVE_SOLARIS_LD_VERSION_SCRIPT - Failed
--- Found AWK program: C:/Program Files/Git/usr/bin/gawk.exe
--- curl version=[7.79.1-DEV]
--- Found Perl: C:/Strawberry/perl/bin/perl.exe (found version "5.42.0")
--- Performing Test CMAKE_HAVE_LIBC_PTHREAD
--- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Failed
--- Looking for pthread_create in pthreads
--- Looking for pthread_create in pthreads - not found
--- Looking for pthread_create in pthread
--- Looking for pthread_create in pthread - not found
--- Found Threads: TRUE
--- Looking for getch in ws2_32;
+
+name: Build Aseprite
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Enable Long Paths
+        shell: powershell
+        run: git config --system core.longpaths true
+
+      - name: Install Build Tools
+        shell: powershell
+        run: choco install cmake ninja innosetup -y --no-progress
+
+      - name: Initialize MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Download Aseprite Source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $version = "v1.3.18.6"
+          $url = "https://github.com/aseprite/aseprite/releases/download/$version/Aseprite-$version-Source.zip"
+
+          Invoke-WebRequest -Uri $url -OutFile aseprite.zip
+
+          Expand-Archive -Path aseprite.zip -DestinationPath source_temp -Force
+
+          $root = Get-ChildItem source_temp -Filter CMakeLists.txt -Recurse |
+            Select-Object -First 1
+
+          if (-not $root) {
+            throw "Aseprite source not found."
+          }
+
+          New-Item -ItemType Directory -Force -Path aseprite | Out-Null
+
+          Get-ChildItem $root.Directory.FullName |
+            Move-Item -Destination aseprite -Force
+
+          "ASE_VER=$version" >> $env:GITHUB_ENV
+
+      - name: Download Precompiled Skia
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $url = "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip"
+
+          Invoke-WebRequest -Uri $url -OutFile skia.zip
+
+          if ((Get-Item skia.zip).Length -lt 100000) {
+            throw "Skia download is too small."
+          }
+
+          Expand-Archive -Path skia.zip -DestinationPath skia_temp -Force
+
+          $library = Get-ChildItem skia_temp -Filter skia.lib -Recurse |
+            Select-Object -First 1
+
+          if (-not $library) {
+            throw "skia.lib not found."
+          }
+
+          $skiaRoot = $library.Directory.Parent.Parent.FullName
+
+          if (-not (Test-Path "$skiaRoot\include\core\SkCanvas.h")) {
+            throw "Skia headers not found."
+          }
+
+          "SKIA_ROOT=$skiaRoot" >> $env:GITHUB_ENV
+
+          Write-Host "Skia installed at $skiaRoot"
+
+      - name: Configure CMake
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          cmake -G Ninja `
+            -S "$env:GITHUB_WORKSPACE\aseprite" `
+            -B "$env:GITHUB_WORKSPACE\build" `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DLAF_BACKEND=skia `
+            -DSKIA_DIR="$env:SKIA_ROOT" `
+            -DSKIA_LIBRARY_DIR="$env:SKIA_ROOT\out\Release-x64" `
+            -DSKIA_LIBRARY="$env:SKIA_ROOT\out\Release-x64\skia.lib" `
+            -DENABLE_UPDATER=OFF `
+            -DENABLE_TESTS=OFF
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "CMake configuration failed."
+          }
+
+      - name: Compile Aseprite
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $cpuCount = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+          $jobs = [math]::Min($cpuCount, 4)
+
+          ninja -C build -j $jobs aseprite
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Compilation failed."
+          }
+
+      - name: Verify Executable
+        shell: powershell
+        run: |
+          if (-not (Test-Path "build\bin\aseprite.exe")) {
+            throw "Aseprite executable not found."
+          }
+
+          Write-Host "Aseprite built successfully!"
+
+      - name: Package Installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $binPath = "$env:GITHUB_WORKSPACE\build\bin"
+
+          $iss = @"
+          [Setup]
+          AppName=Aseprite
+          AppVersion=${{ env.ASE_VER }}
+          DefaultDirName={autopf}\Aseprite
+          DefaultGroupName=Aseprite
+          OutputBaseFilename=aseprite-setup
+          OutputDir=installer
+          Compression=lzma
+          SolidCompression=yes
+
+          [Files]
+          Source: "$binPath\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{group}\Aseprite"; Filename: "{app}\aseprite.exe"
+          "@
+
+          New-Item -ItemType Directory -Force -Path installer | Out-Null
+
+          $iss | Out-File aseprite.iss -Encoding utf8
+
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" aseprite.iss
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Installer packaging failed."
+          }
+
+      - name: Upload Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Aseprite-Windows-Installer
+          path: installer/*.exe
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: success()
+        with:
+          tag_name: ${{ env.ASE_VER }}
+          name: Aseprite ${{ env.ASE_VER }}
+          files: installer/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
